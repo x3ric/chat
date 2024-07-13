@@ -6,6 +6,12 @@
 #include <pthread.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdbool.h>
+
+#include <ifaddrs.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #define DEFAULT_PORT 6969
 #define BUFFER_SIZE 1024
@@ -14,11 +20,11 @@
 struct client_info {
     int sock;
     struct sockaddr_in address;
-    int active;
+    bool active;
 };
 
 struct client_info clients[MAX_CLIENTS];
-int server_running = 0;
+bool server_running = 0;
 
 void *receive_messages(void *arg) {
     struct client_info *client = (struct client_info *)arg;
@@ -59,10 +65,51 @@ void *receive_messages(void *arg) {
 
 void send_message_to_client(int client_index, const char *message) {
     if (client_index >= 0 && client_index < MAX_CLIENTS && clients[client_index].active) {
+        if (strcmp(message, "/ip")) {
+            
+        }
         send(clients[client_index].sock, message, strlen(message), 0);
     } else {
         printf("Client index %d is not valid or inactive.\n", client_index);
     }
+}
+
+char *ip() {
+  struct ifaddrs *ifaddr, *ifa;
+  int family, s;
+  char host[NI_MAXHOST];
+  static char ip_address[NI_MAXHOST];
+
+  if (getifaddrs(&ifaddr) == -1) {
+    return NULL;
+  }
+
+  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+    if (ifa->ifa_addr == NULL)
+      continue;
+
+    family = ifa->ifa_addr->sa_family;
+
+    if (family == AF_INET || family == AF_INET6) {
+      s = getnameinfo(ifa->ifa_addr,
+                      (family == AF_INET) ? sizeof(struct sockaddr_in)
+                                          : sizeof(struct sockaddr_in6),
+                      host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+      if (s != 0) {
+        freeifaddrs(ifaddr);
+        return NULL;
+      }
+
+      if (strcmp(ifa->ifa_name, "lo") != 0) {
+        strncpy(ip_address, host, NI_MAXHOST);
+        freeifaddrs(ifaddr);
+        return ip_address;
+      }
+    }
+  }
+
+  freeifaddrs(ifaddr);
+  return NULL;
 }
 
 void print_public_ip() {
@@ -209,12 +256,16 @@ void run_client(char *server_ip, int port) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc == 1) {
-        if (check_server_running(DEFAULT_PORT)) {
-            run_client("127.0.0.1", DEFAULT_PORT);
-        } else {
-            run_server(NULL, DEFAULT_PORT);
-        }
+
+  char *ip_addr = ip();
+  printf("IP: %s\n", ip_addr);
+
+  if (argc == 1) {
+    if (check_server_running(DEFAULT_PORT)) {
+      run_client("127.0.0.1", DEFAULT_PORT);
+    } else {
+      run_server(NULL, DEFAULT_PORT);
+    }
     } else if (argc == 3 && strcmp(argv[1], "-s") == 0) {
         char *ip_port = argv[2];
         char *ip_address = strtok(ip_port, ":");

@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -pthread
 TARGET = chat
-SRC = ./src/*.c
+SRC = *.c
 PREFIX = /usr/local
 
 .PHONY: all clean install uninstall run
