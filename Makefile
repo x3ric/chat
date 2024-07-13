@@ -1,5 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -pthread
+LDFLAGS = -lreadline -lncurses
 TARGET = chat
 SRC = ./src/*.c
 PREFIX = /usr/local
@@ -9,7 +10,7 @@ PREFIX = /usr/local
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
 run: clean all
 	./$(TARGET)
