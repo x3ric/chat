@@ -17,7 +17,7 @@ Clone the repository and install the executable using the following commands:
 <pre>
 git clone https://github.com/x3ric/chat
 cd chat
-make install
+sudo make install
 </pre>
 
 ### Usage

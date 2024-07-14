@@ -75,8 +75,10 @@ void cleanup_clients() {
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         if (clients[i].active) {
             close(clients[i].sock);
-            if (server_running)
-                printf("Client %s:%d Disconnected.\n", inet_ntoa(clients[i].address.sin_addr), ntohs(clients[i].address.sin_port));
+            if (server_running) {
+                printf("\x1b[A\nClient %s:%d Disconnected.\nServer❯ ", inet_ntoa(clients[i].address.sin_addr), ntohs(clients[i].address.sin_port));
+                fflush(stdout);
+            }
         }
     }
 }
@@ -91,16 +93,24 @@ void *receive_messages(void *arg) {
     while ((valread = read(sock, buffer, BUFFER_SIZE)) > 0) {
         if (!connected) {
             if (server_running)
-                printf("Client %s:%d Connected.\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+                printf("\x1b[A\nClient %s:%d Connected.\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
             connected = true;
         }
-        printf("%s", buffer);
+        if (server_running) {
+            printf("\x1b[2K\r%s\nServer❯ ", buffer);
+            fflush(stdout);
+        } else {
+            printf("\x1b[2K\r%s\n%s❯ ", buffer, getlogin());
+            fflush(stdout);
+        }
         send_to_all_clients(buffer, sock);
         memset(buffer, 0, BUFFER_SIZE);
     }
     if (valread == 0 || !server_running) {
-        if (connected && server_running)
-            printf("Client %s:%d Disconnected.\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+        if (connected && server_running) {
+            printf("\x1b[A\nClient %s:%d Disconnected.\nServer❯ ", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+            fflush(stdout);
+        }
     } else if (valread == -1 && errno != EINTR) {
         perror("Error reading from socket");
     }
@@ -109,14 +119,55 @@ void *receive_messages(void *arg) {
     return NULL;
 }
 
+int localcmd(char *buffer, int sock) {
+    if (strcmp(buffer, "exit") == 0) {
+        printf("Exiting...\n");
+        if (sock > 0) {
+            close(sock);
+        }
+        exit(0);
+    } else if (strcmp(buffer, "help") == 0) {
+        printf("Available commands:\n  help      - Display this help message\n  exit      - Disconnect and exit the program\n");
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
 void *server_input(void *arg) {
     char buffer[BUFFER_SIZE];
-    while (fgets(buffer, BUFFER_SIZE, stdin) != NULL) {
-        char prefixed_message[BUFFER_SIZE + 50];
-        sprintf(prefixed_message, "Server❯ %s", buffer);
-        send_to_all_clients(prefixed_message, -1);
+    while (true) {
+        printf("Server❯ ");
+        fflush(stdout);
+        if (fgets(buffer, BUFFER_SIZE, stdin) != NULL) {
+            buffer[strcspn(buffer, "\n")] = '\0';
+            if (localcmd(buffer, -1) == 0) {
+                char prefixed_message[BUFFER_SIZE + 50];
+                sprintf(prefixed_message, "Server❯ %s", buffer);
+                send_to_all_clients(prefixed_message, -1);
+            }
+        }
     }
+    buffer[strcspn(buffer, "\n")] = '\0';
     return NULL;
+}
+
+void client_input(int sock) {
+    char buffer[BUFFER_SIZE];
+    char *name = getlogin();
+    while (true) {
+        printf("%s❯ ", name);
+        fflush(stdout);
+        if (fgets(buffer, BUFFER_SIZE, stdin) != NULL) {
+            buffer[strcspn(buffer, "\n")] = '\0';
+            if (localcmd(buffer, sock) == 0) {
+                char prefixed_message[BUFFER_SIZE + 50];
+                sprintf(prefixed_message, "%s❯ %s", name, buffer);
+                send(sock, prefixed_message, strlen(prefixed_message), 0);
+            }
+        }
+    }
+    buffer[strcspn(buffer, "\n")] = '\0';
 }
 
 void run_server(const char *ip, int port) {
@@ -127,29 +178,21 @@ void run_server(const char *ip, int port) {
         perror("socket failed");
         exit(EXIT_FAILURE);
     }
-    address.sin_family = AF_INET;
-    if (ip == NULL) {
-        address.sin_addr.s_addr = INADDR_ANY;
-    } else {
-        if (inet_pton(AF_INET, ip, &address.sin_addr) <= 0) {
-            perror("Invalid IP address");
-            close(server_fd);
-            exit(EXIT_FAILURE);
-        }
-    }
-    address.sin_port = htons(port);
     int opt = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("setsockopt");
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt failed");
         exit(EXIT_FAILURE);
     }
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(port);
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         perror("bind failed");
         close(server_fd);
         exit(EXIT_FAILURE);
     }
-    if (listen(server_fd, 3) < 0) {
-        perror("listen");
+    if (listen(server_fd, MAX_CLIENTS) < 0) {
+        perror("listen failed");
         close(server_fd);
         exit(EXIT_FAILURE);
     }
@@ -167,7 +210,7 @@ void run_server(const char *ip, int port) {
             if (errno == EINTR) {
                 continue;
             }
-            perror("accept");
+            perror("accept failed");
             cleanup_clients();
             close(server_fd);
             exit(EXIT_FAILURE);
@@ -200,17 +243,6 @@ void run_server(const char *ip, int port) {
     cleanup_clients();
 }
 
-void client_input(int sock) {
-    char buffer[BUFFER_SIZE];
-    while(true){
-        if (fgets(buffer, BUFFER_SIZE, stdin) != NULL) {
-            char prefixed_message[BUFFER_SIZE + 50];
-            sprintf(prefixed_message, "%s❯ %s", getlogin(), buffer);
-            send(sock, prefixed_message, strlen(prefixed_message), 0);
-        }
-    }
-}
-
 void run_client(char *ip, int port) {
     int sock = 0;
     struct sockaddr_in serv_addr;
@@ -238,4 +270,5 @@ void run_client(char *ip, int port) {
     client_input(sock);
     close(sock);
 }
+
 #endif /* LIB_H_ */

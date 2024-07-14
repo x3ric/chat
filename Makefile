@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -pthread
-LDFLAGS = -lreadline -lncurses
+LDFLAGS =
 TARGET = chat
 SRC = ./src/*.c
 PREFIX = /usr/local
