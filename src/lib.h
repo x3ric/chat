@@ -3,12 +3,18 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 #include <pthread.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <errno.h>
-#include <stdbool.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #define DEFAULT_PORT 6969
 #define BUFFER_SIZE 1024
@@ -31,18 +37,46 @@ void parse_ip_port(char *arg, char **ip, int *port) {
     *port = (port_str != NULL) ? atoi(port_str) : DEFAULT_PORT;
 }
 
-void print_public_ip() {
+void print_ip() {
     FILE *fp;
-    char result[BUFFER_SIZE] = {0};
-    fp = popen("curl -s ifconfig.me", "r");
-    if (fp == NULL) {
-        perror("Failed to run command");
-        exit(EXIT_FAILURE);
+    char public_ip[BUFFER_SIZE] = {0};
+    if ((fp = popen("curl -s ifconfig.me", "r")) == NULL) {
+        perror("popen");
+        return;
     }
-    if (fgets(result, sizeof(result), fp) != NULL) {
-        printf("Server Public IP: %s -> ./chat -c %s:%d\n", result, result, DEFAULT_PORT);
+    if (fgets(public_ip, sizeof(public_ip), fp) == NULL) {
+        perror("fgets");
+        pclose(fp);
+        return;
     }
     pclose(fp);
+    public_ip[strcspn(public_ip, "\n")] = '\0';
+    int sock;
+    struct sockaddr_in serv = { .sin_family = AF_INET, .sin_port = htons(80) };
+    char local_ip[BUFFER_SIZE] = {0};
+    struct sockaddr_in name;
+    socklen_t namelen = sizeof(name);
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("socket");
+        return;
+    }
+    inet_pton(AF_INET, "8.8.8.8", &serv.sin_addr);
+    if (connect(sock, (struct sockaddr *)&serv, sizeof(serv)) < 0) {
+        perror("connect");
+        close(sock);
+        return;
+    }
+    if (getsockname(sock, (struct sockaddr *)&name, &namelen) < 0) {
+        perror("getsockname");
+        close(sock);
+        return;
+    }
+    close(sock);
+    if (inet_ntop(AF_INET, &name.sin_addr, local_ip, sizeof(local_ip)) == NULL) {
+        perror("inet_ntop");
+        return;
+    }
+    printf("Public IP: %s, Local IP: %s -> ./chat -c %s:%d\n", public_ip, local_ip, local_ip, DEFAULT_PORT);
 }
 
 int check_server_running(int port) {
@@ -126,8 +160,10 @@ int localcmd(char *buffer, int sock) {
             close(sock);
         }
         exit(0);
+    } else if (strcmp(buffer, "ip") == 0) {
+        print_ip();
     } else if (strcmp(buffer, "help") == 0) {
-        printf("Available commands:\n  help      - Display this help message\n  exit      - Disconnect and exit the program\n");
+        printf("Available commands:\n  help      - Display this help message\n  exit      - Disconnect and exit the program\n  ip        - Shows your ip and command to connect if is a server\n");
     } else {
         return 0;
     }
@@ -135,39 +171,41 @@ int localcmd(char *buffer, int sock) {
 }
 
 void *server_input(void *arg) {
-    char buffer[BUFFER_SIZE];
+    char *buffer;
     while (true) {
-        printf("Server❯ ");
-        fflush(stdout);
-        if (fgets(buffer, BUFFER_SIZE, stdin) != NULL) {
-            buffer[strcspn(buffer, "\n")] = '\0';
+        buffer = readline("Server❯ ");
+        if (buffer == NULL)
+            break;
+        if (*buffer) { 
+            add_history(buffer);
             if (localcmd(buffer, -1) == 0) {
                 char prefixed_message[BUFFER_SIZE + 50];
-                sprintf(prefixed_message, "Server❯ %s", buffer);
+                snprintf(prefixed_message, sizeof(prefixed_message), "Server❯ %s", buffer);
                 send_to_all_clients(prefixed_message, -1);
             }
         }
+        free(buffer);
     }
-    buffer[strcspn(buffer, "\n")] = '\0';
     return NULL;
 }
 
 void client_input(int sock) {
-    char buffer[BUFFER_SIZE];
-    char *name = getlogin();
+    char *buffer;
+    char *name = getlogin() ? getlogin() : "Client";
     while (true) {
-        printf("%s❯ ", name);
-        fflush(stdout);
-        if (fgets(buffer, BUFFER_SIZE, stdin) != NULL) {
-            buffer[strcspn(buffer, "\n")] = '\0';
+        buffer = readline(name);
+        if (buffer == NULL)
+            break;
+        if (*buffer) {
+            add_history(buffer);
             if (localcmd(buffer, sock) == 0) {
                 char prefixed_message[BUFFER_SIZE + 50];
-                sprintf(prefixed_message, "%s❯ %s", name, buffer);
+                snprintf(prefixed_message, sizeof(prefixed_message), "%s❯ %s", name, buffer);
                 send(sock, prefixed_message, strlen(prefixed_message), 0);
             }
         }
+        free(buffer);
     }
-    buffer[strcspn(buffer, "\n")] = '\0';
 }
 
 void run_server(const char *ip, int port) {
@@ -196,7 +234,7 @@ void run_server(const char *ip, int port) {
         close(server_fd);
         exit(EXIT_FAILURE);
     }
-    print_public_ip();
+    print_ip();
     printf("Server listening on port %d\n", port);
     server_running = true;
     pthread_t input_thread_id;
