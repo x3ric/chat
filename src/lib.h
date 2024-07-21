@@ -191,7 +191,13 @@ void *server_input(void *arg) {
 
 void client_input(int sock) {
     char *buffer;
-    char *name = getlogin() ? getlogin() : "Client";
+    char *login_name = getlogin();
+    char name[256];
+    if (login_name) {
+        sprintf(name, "%s❯ ", login_name);
+    } else {
+        sprintf(name, "Client❯ ");
+    }
     while (true) {
         buffer = readline(name);
         if (buffer == NULL)
@@ -200,7 +206,7 @@ void client_input(int sock) {
             add_history(buffer);
             if (localcmd(buffer, sock) == 0) {
                 char prefixed_message[BUFFER_SIZE + 50];
-                snprintf(prefixed_message, sizeof(prefixed_message), "%s❯ %s", name, buffer);
+                snprintf(prefixed_message, sizeof(prefixed_message), "%s%s", name, buffer);
                 send(sock, prefixed_message, strlen(prefixed_message), 0);
             }
         }
